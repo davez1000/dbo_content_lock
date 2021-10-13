@@ -1,0 +1,193 @@
+<?php
+
+/**
+ * @file
+ * Contains dbo_content_lock.module.
+ */
+
+use Drupal\Core\Routing\RouteMatchInterface;
+use Drupal\Core\Entity\EntityFormInterface;
+use Drupal\Core\Form\FormStateInterface;
+use Drupal\user\Entity\User;
+use Symfony\Component\HttpFoundation\RedirectResponse;
+
+/**
+ * Implements hook_help().
+ */
+function dbo_content_lock_help($route_name, RouteMatchInterface $route_match) {
+  switch ($route_name) {
+    // Main module help for the dbo_content_lock module.
+    case 'help.page.dbo_content_lock':
+      $output = '';
+      $output .= '<h3>' . t('About') . '</h3>';
+      $output .= '<p>' . t('Locks content for editing.') . '</p>';
+      return $output;
+
+    default:
+  }
+}
+
+/**
+ * Implements hook_form_alter().
+ */
+function dbo_content_lock_form_alter(&$form, FormStateInterface $form_state, $form_id) {
+
+  if (!$form_state->getFormObject() instanceof EntityFormInterface) {
+    return;
+  }
+
+  $entity = $form_state->getFormObject()->getEntity();
+  $entity_type = $entity->getEntityTypeId();
+  $bundle = $entity->bundle();
+  $user = \Drupal::currentUser();
+
+  if ($entity_type != 'node') {
+    return;
+  }
+
+  $state = \Drupal::state()->get('dbo_content_lock') ?? [];
+
+  $storage_id = $entity_type . '_' . $entity->id();
+
+  $params = [
+    'storage_id' => $storage_id,
+    'entity' => $entity,
+    'state' => $state,
+    'user' => $user,
+  ];
+
+  // We act only on edit form, not for a creation of a new entity.
+  if (!is_null($entity->id())) {
+    if (!empty($state[$storage_id])) {
+      if ($state[$storage_id]['uid'] != $user->id()) {
+        _dbo_content_lock_page_locked($form, $params);
+      }
+      else {
+        _dbo_content_lock_page_unlocked($form, $params);
+      }
+    }
+    else {
+      _dbo_content_lock_page_unlocked($form, $params);
+    }
+  }
+}
+
+/**
+ * Locks a page so it can't be edited.
+ */
+function _dbo_content_lock_page_locked(&$form, $params) {
+  /*
+   * Check to see if the form is already locked. If you were the last person
+   * to lock the document, then you are allowed to continue editing. Otherwise
+   * the document is locked for you.
+   */
+  $form['#disabled'] = TRUE;
+  // Get user for message.
+  $user_load = User::load($params['state'][$params['storage_id']]['uid']);
+  $user_name = $user_load->getUsername();
+  \Drupal::messenger()->addError(t('Content locking (id:@cid): This document is currently LOCKED and cannot be changed, as it is in the process of being edited. The editor is "@un".', ['@un' => $user_name, '@cid' => $params['entity']->id()]), 'error');
+}
+
+/**
+ * Allows a page to be edited (sets a lock).
+ */
+function _dbo_content_lock_page_unlocked(&$form, $params) {
+  // Set the lock. You can edit the content.
+  $form['#disabled'] = FALSE;
+
+  $form['unlock_1'] = [
+    '#type' => 'submit',
+    '#weight' => -1000,
+    '#value' => t('CLOSE'),
+    '#submit' => ['dbo_content_lock_form_submit'],
+    '#limit_validation_errors' => [],
+  ];
+
+  $form['actions']['unlock_2'] = [
+    '#type' => 'submit',
+    '#weight' => 1000,
+    '#value' => t('CLOSE'),
+    '#submit' => ['dbo_content_lock_form_submit'],
+    '#limit_validation_errors' => [],
+  ];
+
+  // $state[$params['storage_id']] = [
+  $params['state'][$params['storage_id']] = [
+    'uid' => $params['user']->id(),
+    'time' => \Drupal::time()->getRequestTime(),
+  ];
+  \Drupal::state()->set('dbo_content_lock', $params['state']);
+  \Drupal::messenger()->addWarning(t('Content locking (id:@cid): This document is now locked, nobody else can edit it until you save it. If you don\'t want to make any changes, just click the CLOSE button below.', ['@cid' => $params['entity']->id()]), 'warning');
+
+  // Set submit handler.
+  foreach (['submit', 'publish'] as $key) {
+    if (isset($form['actions'][$key])) {
+      $form['actions'][$key]['#submit'][] = 'dbo_content_lock_form_submit';
+    }
+  }
+}
+
+/**
+ * Submit handler for content_lock.
+ */
+function dbo_content_lock_form_submit($form, FormStateInterface $form_state) {
+  $entity = $form_state->getFormObject()->getEntity();
+  $entity_type = $entity->getEntityTypeId();
+  $bundle = $entity->bundle();
+  $user = \Drupal::currentUser();
+
+  $storage_id = $entity_type . '_' . $entity->id();
+
+  $state = \Drupal::state()->get('dbo_content_lock');
+
+  // Release the lock.
+  unset($state[$storage_id]);
+  \Drupal::state()->set('dbo_content_lock', $state);
+
+  // We use the messages session so we can unset().
+  $messages = $_SESSION['_symfony_flashes'];
+  if (!empty($messages)) {
+    $message_count = count($messages);
+    foreach ($messages as $type => $items) {
+      $msg = 0;
+      foreach ($items as $item) {
+        if (preg_match('/^Content\s+locking\s+\(id:' . $entity->id() . '/', $item->__toString())) {
+          unset($_SESSION['_symfony_flashes'][$type][$msg]);
+        }
+        $msg++;
+      }
+      // If there are no messages in the $type array, unset the type.
+      if (count($_SESSION['_symfony_flashes'][$type]) < 1) {
+        unset($_SESSION['_symfony_flashes'][$type]);
+      }
+    }
+  }
+
+  // Check if there is a destination, if not redirect (if it's the same as the edit page).
+  $destination = \Drupal::service('redirect.destination')->getAsArray();
+  if (!empty($destination['destination'])) {
+    if ($destination['destination'] == '/node/' . $entity->id() . '/edit') {
+      $response = new RedirectResponse('/admin/content');
+      $response->send();
+    }
+  }
+
+}
+
+/**
+ * Implements hook_cron().
+ */
+function dbo_content_lock_cron() {
+  // Remove lock if it has been stale for 24 hours or more.
+  $expire_time = 60 * 60 * 24;
+  $state = \Drupal::state()->get('dbo_content_lock') ?? [];
+  if (!empty($state)) {
+    foreach ($state as $storage_id => $item) {
+      if (\Drupal::time()->getRequestTime() > $item['time'] + $expire_time) {
+        unset($state[$storage_id]);
+        \Drupal::logger('dbo_content_lock')->notice('@storage_id content lock deleted due to lock time being > 24 hours.', ['@storage_id' => $storage_id]);
+      }
+    }
+    \Drupal::state()->set('dbo_content_lock', $state);
+  }
+}

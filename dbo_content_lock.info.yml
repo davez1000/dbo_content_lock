@@ -1,0 +1,6 @@
+name: 'Lock Content'
+type: module
+description: 'Locks content for editing.'
+core_version_requirement: ^8 || ^9
+package: 'Custom'
+# dependencies:

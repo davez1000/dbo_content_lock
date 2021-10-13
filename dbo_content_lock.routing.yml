@@ -1,0 +1,19 @@
+dbo_content_lock.locks_page:
+  path: '/admin/config/content-locks'
+  defaults:
+    _controller: '\Drupal\dbo_content_lock\Controller\ContentLocksController::locksPage'
+    _title: 'List of content currently locked'
+  requirements:
+    _permission: 'content locks'
+  options:
+    _admin_route: TRUE
+dbo_content_lock.delete_lock:
+  path: '/admin/config/content-delete-lock/{id}'
+  defaults:
+    _controller: '\Drupal\dbo_content_lock\Controller\ContentLocksController::deleteLock'
+    _title: ''
+  requirements:
+    _permission: 'content locks'
+    id: \w+
+  options:
+    _admin_route: TRUE

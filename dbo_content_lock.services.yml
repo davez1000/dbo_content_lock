@@ -1,0 +1,4 @@
+services:
+  dbo_content_lock.content_locks_manager:
+    class: Drupal\dbo_content_lock\Service\ContentLocksManager
+    arguments: ['@entity_type.manager']

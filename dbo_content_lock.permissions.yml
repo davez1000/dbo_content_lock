@@ -1,0 +1,4 @@
+content locks:
+  title: 'Content locks'
+  description: 'Permission to view and edit content locks.'
+  restrict access: true
